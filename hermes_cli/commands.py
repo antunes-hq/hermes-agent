@@ -1056,39 +1056,82 @@ def _collect_gateway_skill_entries(
 # Platform-specific wrappers
 # ---------------------------------------------------------------------------
 
+# Sentinela de "sem corte" na coleta de plugins/skills: o teto real e
+# aplicado depois da ordenacao por prioridade, em telegram_menu_commands().
+_UNLIMITED_MENU_SLOTS = 10_000
+
+
 def telegram_menu_commands(max_commands: int = 100) -> tuple[list[tuple[str, str]], int]:
     """Return Telegram menu commands capped to the Bot API limit.
 
     Priority order (higher priority = never bumped by overflow):
-      1. Core CommandDef commands (always included)
-      2. Plugin slash commands (take precedence over skills)
-      3. Built-in skill commands (fill remaining slots, alphabetical)
+      1. User-configured ``priority`` list (applies to ALL commands: built-in,
+         plugin, and skill commands). Nothing in ``priority`` can be dropped
+         in favor of something outside it.
+      2. Remaining built-in CommandDef commands (original registry order).
+      3. Remaining plugin slash commands (alphabetical).
+      4. Remaining built-in skill commands (alphabetical).
 
-    Skills are the only tier that gets trimmed when the cap is hit.
-    User-installed hub skills are excluded — accessible via /skills.
-    Skills disabled for the ``"telegram"`` platform (via ``hermes skills
-    config``) are excluded from the menu entirely.
+    The ``max_commands`` cap is applied AFTER priority ordering, so a curated
+    short menu can contain only priority entries even when the cap is below
+    the total built-in count.
 
     Returns:
         (menu_commands, hidden_count) where hidden_count is the number of
-        commands omitted due to the cap.
+        commands omitted due to the cap (built-ins, plugins, and skills all
+        counted).
     """
-    core_commands = _prioritize_telegram_menu_commands(list(telegram_bot_commands()))
-    reserved_names = {n for n, _ in core_commands}
-    all_commands = list(core_commands)
-    hidden_core_count = max(0, len(all_commands) - max_commands)
+    # Get effective priority list (sanitized names)
+    priority_list = _telegram_effective_priority()
+    priority_map = {name: idx for idx, name in enumerate(priority_list)}
 
-    remaining_slots = max(0, max_commands - len(all_commands))
-    entries, hidden_count = _collect_gateway_skill_entries(
+    # Built-in CommandDef commands only — plugins arrive via the collector below.
+    core_commands = list(telegram_bot_commands())
+
+    # Collect plugin + skill entries with NO trimming: the cap must be applied
+    # after the priority sort, otherwise a curated skill would be dropped here
+    # before it ever gets a chance to be promoted.
+    reserved_names = {n for n, _ in core_commands}
+    all_skill_entries, _ = _collect_gateway_skill_entries(
         platform="telegram",
-        max_slots=remaining_slots,
-        reserved_names=reserved_names,
+        max_slots=_UNLIMITED_MENU_SLOTS,
+        reserved_names=reserved_names.copy(),
         desc_limit=40,
         sanitize_name=_sanitize_telegram_name,
     )
-    # Drop the cmd_key — Telegram only needs (name, desc) pairs.
-    all_commands.extend((n, d) for n, d, _k in entries)
-    return all_commands[:max_commands], hidden_count + hidden_core_count
+
+    # Build combined list with tier info for non-priority ordering:
+    # tier 0 = core (built-ins), tier 1 = plugins, tier 2 = skills
+    # Plugin entries have empty cmd_key; skill entries have non-empty cmd_key
+    combined: list[tuple[str, str, int]] = []  # (name, desc, tier)
+    for n, d in core_commands:
+        combined.append((n, d, 0))
+    for n, d, cmd_key in all_skill_entries:
+        tier = 1 if cmd_key == "" else 2
+        combined.append((n, d, tier))
+
+    # Sort by: (in_priority, priority_index, tier, original_order)
+    # - in_priority: 0 for items in priority list, 1 for others
+    # - priority_index: position in priority list (for items in priority)
+    # - tier: 0, 1, 2 for core/plugin/skill (for non-priority items)
+    # - original_order: stable sort key to preserve original order within tier
+    def sort_key(item: tuple[str, str, int], idx: int) -> tuple[int, int, int, int]:
+        name = item[0]
+        if name in priority_map:
+            return (0, priority_map[name], 0, idx)
+        return (1, item[2], idx, 0)
+
+    # Use enumerate to get stable original index
+    combined_with_idx = list(enumerate(combined))
+    combined_with_idx.sort(key=lambda x: sort_key(x[1], x[0]))
+    sorted_commands = [(name, desc) for _, (name, desc, _tier) in combined_with_idx]
+
+    # Apply cap
+    total_available = len(sorted_commands)
+    final_commands = sorted_commands[:max_commands]
+    hidden_count = total_available - len(final_commands)
+
+    return final_commands, hidden_count
 
 
 def discord_skill_commands(
