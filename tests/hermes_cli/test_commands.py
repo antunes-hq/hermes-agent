@@ -220,6 +220,40 @@ class TestSlackNativeSlashes:
 
 
 
+    def test_excludes_slack_reserved_commands(self):
+        """Slack built-in commands (e.g. /status, /me, /join) cannot be
+        registered by apps and must be excluded from the manifest.
+        Users can still reach them via /hermes <command>."""
+        names = {n for n, _d, _h in slack_native_slashes()}
+        for reserved in _SLACK_RESERVED_COMMANDS:
+            assert reserved not in names, (
+                f"/{reserved} is a Slack built-in and must not appear in the manifest"
+            )
+
+    def test_includes_aliases_as_first_class_slashes(self):
+        """Aliases (/bg, …) must be registered as standalone
+        slashes — this is the whole point of native-slashes parity.
+
+        Asserts the contract (aliases are surfaced as first-class slashes),
+        not a specific alias's survival of Slack's 50-slash clamp — which alias
+        lands last shifts whenever a canonical command is added. Only the
+        explicitly pinned ``_SLACK_PRIORITY_ALIASES`` are guaranteed slots;
+        every other alias (e.g. ``reset``) may be clamped once the registry
+        fills the cap — canonical commands win the contest, and clamped
+        aliases stay reachable via ``/hermes <alias>``.
+
+        NOTE: "btw" was intentionally removed from /background's aliases
+        (see fix/btw-alias-collision) so it can route to the btw-flow skill
+        instead of silently shadowing it. It is deliberately absent here.
+        """
+        slashes = slack_native_slashes()
+        names = {n for n, _d, _h in slashes}
+        # The pinned priority aliases are guaranteed to survive the clamp.
+        assert "bg" in names
+        assert "btw" not in names
+        # And at least one alias is surfaced as an alias entry (description
+        # carries the "Alias for /…" marker), proving the alias pass ran.
+        assert any(d.startswith("Alias for /") for _n, d, _h in slashes)
 
     def test_telegram_parity(self):
         """Every Telegram bot command must be registerable on Slack too.
@@ -266,12 +300,14 @@ class TestSlackAppManifest:
             # HTML-escapes args — we want the raw text)
             assert "should_escape" in entry
 
-    def test_btw_is_in_manifest(self):
-        """Regression: /btw must be a native Slack slash, not just a
-        /hermes subcommand."""
+    def test_btw_is_not_in_manifest(self):
+        """/btw is no longer a /background alias (fix/btw-alias-collision) —
+        it must NOT appear as a native Slack slash here, so it stays free
+        for the btw-flow skill's own slash registration on platforms that
+        support skill commands."""
         m = slack_app_manifest()
         commands = [c["command"] for c in m["features"]["slash_commands"]]
-        assert "/btw" in commands
+        assert "/btw" not in commands
 
 
 # ---------------------------------------------------------------------------

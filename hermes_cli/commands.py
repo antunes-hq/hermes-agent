@@ -190,7 +190,7 @@ COMMAND_REGISTRY: list[CommandDef] = [
     CommandDef("deny", "Deny a pending dangerous command (optionally with a reason)", "Session",
                gateway_only=True, args_hint="[all] [reason]", busy_policy="dispatch"),
     CommandDef("background", "Run a prompt in the background", "Session",
-               aliases=("bg", "btw"), args_hint="<prompt>", busy_policy="dispatch"),
+aliases=("bg",), args_hint="<prompt>", busy_policy="dispatch"),
     CommandDef("agents", "Show active agents and running tasks", "Session",
                aliases=("tasks",), busy_policy="dispatch"),
     CommandDef("journey", "Open the learning journey timeline",
@@ -1314,7 +1314,7 @@ _SLACK_RESERVED_COMMANDS = frozenset({
 # High-value aliases that must survive Slack's 50-slash cap even when the
 # registry fills up. Without this, adding a new canonical command silently
 # clamps off low-priority aliases (they're added in the second pass), so a
-# long-standing native slash like /btw could disappear just because an
+# long-standing native slash like /bg could disappear just because an
 # unrelated command landed. These claim their slots right after /hermes,
 # ahead of both canonical names and the rest of the aliases. Anything not
 # listed here still degrades gracefully (reachable via /hermes <command>).
@@ -1322,7 +1322,11 @@ _SLACK_RESERVED_COMMANDS = frozenset({
 # would otherwise get, and the Telegram-parity test fails when a canonical
 # gets clamped ("reset" was unpinned for exactly that — /new keeps its
 # native slot, the alias spelling stays reachable via /hermes reset).
-_SLACK_PRIORITY_ALIASES = ("btw", "bg")
+#
+# "btw" was removed from /background's aliases (and from this pin list) so
+# it can route to the btw-flow skill instead — it was silently shadowing
+# that skill on every platform. See fix/btw-alias-collision.
+_SLACK_PRIORITY_ALIASES = ("bg",)
 
 # Canonical commands intentionally NOT given a native Slack slash slot. Slack
 # caps apps at 50 slash commands and the registry is at that ceiling; rather
